@@ -2,9 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL 
-      ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, '') 
-      : 'http://localhost:5000';
+    const rawUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000').trim();
+    const backendUrl = rawUrl.replace(/\/api\/?$/, '').trim();
     return [
       {
         source: '/uploads/:path*',
