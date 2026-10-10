@@ -13,7 +13,7 @@ const getBaseUrl = () => {
       return `https://${host}:5000/api`;
     }
   }
-  return 'https://nepal-mavi-erp.onrender.com/api';
+  return 'https://laxminath-api.onrender.com/api';
 };
 
 const api = axios.create({
