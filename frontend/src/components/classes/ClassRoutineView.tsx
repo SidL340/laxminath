@@ -1,0 +1,1635 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import api from '@/lib/api';
+import {
+  Clock,
+  Save,
+  Printer,
+  AlertTriangle,
+  CheckCircle2,
+  Calendar,
+  School,
+  UserCheck,
+  Sparkles,
+  ArrowLeft,
+  Users,
+  Copy,
+  Layers,
+  CheckSquare,
+  Square,
+  BookOpen,
+  HelpCircle,
+  Plus,
+  Trash2,
+  Coffee,
+  Table,
+  Edit3,
+  Zap,
+  Sliders,
+  RefreshCw,
+} from 'lucide-react';
+import Link from 'next/link';
+import toast from 'react-hot-toast';
+
+const DAYS = [
+  { key: 'SUNDAY', name: 'Sunday (आइतबार)', short: 'आइत' },
+  { key: 'MONDAY', name: 'Monday (सोमबार)', short: 'सोम' },
+  { key: 'TUESDAY', name: 'Tuesday (मंगलबार)', short: 'मंगल' },
+  { key: 'WEDNESDAY', name: 'Wednesday (बुधबार)', short: 'बुध' },
+  { key: 'THURSDAY', name: 'Thursday (बिहीबार)', short: 'बिही' },
+  { key: 'FRIDAY', name: 'Friday (शुक्रबार)', short: 'शुक्र' },
+  { key: 'SATURDAY', name: 'Saturday (शनिबार)', short: 'शनि' },
+];
+
+export interface PeriodConfig {
+  num: number;
+  startTime: string;
+  endTime: string;
+  hasBreakAfter?: boolean;
+  breakTitle?: string;
+  breakTime?: string;
+}
+
+// Convert "10:25 AM" or "01:30 PM" to "10:25" or "13:30" for input[type="time"]
+export function toTimeInputValue(timeStr: string): string {
+  if (!timeStr) return '';
+  const trimmed = timeStr.trim();
+  if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+    const [h, m] = trimmed.split(':');
+    return `${h.padStart(2, '0')}:${m}`;
+  }
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (match) {
+    let hour = parseInt(match[1]);
+    const min = match[2];
+    const meridiem = match[3]?.toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    return `${hour.toString().padStart(2, '0')}:${min}`;
+  }
+  return '';
+}
+
+// Convert "13:30" or "10:25" back to "01:30 PM" / "10:25 AM"
+export function fromTimeInputValue(time24: string): string {
+  if (!time24) return '';
+  const parts = time24.split(':');
+  if (parts.length < 2) return time24;
+  let hour = parseInt(parts[0]);
+  const min = parts[1] || '00';
+  const meridiem = hour >= 12 ? 'PM' : 'AM';
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  return `${hour.toString().padStart(2, '0')}:${min} ${meridiem}`;
+}
+
+// 2 Standard School Shifts (दिवा सत्र र बिहानी सत्र)
+export const SCHOOL_SHIFTS = [
+  {
+    id: 'day',
+    name: '☀️ दिवा सत्र (Day Shift: 10:25 AM)',
+    periods: [
+      { num: 1, startTime: '10:25 AM', endTime: '11:15 AM', hasBreakAfter: false },
+      { num: 2, startTime: '11:15 AM', endTime: '12:00 PM', hasBreakAfter: false },
+      { num: 3, startTime: '12:00 PM', endTime: '12:45 PM', hasBreakAfter: false },
+      { num: 4, startTime: '12:45 PM', endTime: '01:30 PM', hasBreakAfter: true, breakTitle: 'खाजा समय (Tiffin Break)', breakTime: '01:30 - 01:55 PM' },
+      { num: 5, startTime: '01:55 PM', endTime: '02:35 PM', hasBreakAfter: false },
+      { num: 6, startTime: '02:35 PM', endTime: '03:15 PM', hasBreakAfter: false },
+      { num: 7, startTime: '03:15 PM', endTime: '03:55 PM', hasBreakAfter: false },
+      { num: 8, startTime: '03:55 PM', endTime: '04:15 PM', hasBreakAfter: false },
+    ],
+  },
+  {
+    id: 'morning',
+    name: '🌅 बिहानी सत्र (Morning Shift: 06:30 AM)',
+    periods: [
+      { num: 1, startTime: '06:30 AM', endTime: '07:10 AM', hasBreakAfter: false },
+      { num: 2, startTime: '07:10 AM', endTime: '07:50 AM', hasBreakAfter: false },
+      { num: 3, startTime: '07:50 AM', endTime: '08:30 AM', hasBreakAfter: true, breakTitle: 'विश्राम (Break)', breakTime: '08:30 - 08:50 AM' },
+      { num: 4, startTime: '08:50 AM', endTime: '09:30 AM', hasBreakAfter: false },
+      { num: 5, startTime: '09:30 AM', endTime: '10:15 AM', hasBreakAfter: false },
+      { num: 6, startTime: '10:15 AM', endTime: '11:00 AM', hasBreakAfter: false },
+    ],
+  },
+];
+
+export const SHIFT_STORAGE_KEYS = {
+  day: 'custom_shift_day_timings',
+  morning: 'custom_shift_morning_timings',
+};
+
+// Retrieve shift preset (prioritizes user-saved custom timings from localStorage)
+export function getShiftPeriods(shiftId: string): PeriodConfig[] {
+  if (typeof window !== 'undefined') {
+    const key = shiftId === 'morning' ? SHIFT_STORAGE_KEYS.morning : SHIFT_STORAGE_KEYS.day;
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        console.error('Failed to parse saved shift preset', e);
+      }
+    }
+  }
+  const defaultShift = SCHOOL_SHIFTS.find((s) => s.id === shiftId);
+  return defaultShift ? defaultShift.periods : SCHOOL_SHIFTS[0].periods;
+}
+
+export function getActiveDefaultPeriods(): PeriodConfig[] {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('school_default_routine_timings');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        console.error('Failed to parse school_default_routine_timings', e);
+      }
+    }
+  }
+  return getShiftPeriods('day');
+}
+
+export const STANDARD_SCHOOL_TIMINGS: PeriodConfig[] = SCHOOL_SHIFTS[0].periods;
+const DEFAULT_PERIODS: PeriodConfig[] = SCHOOL_SHIFTS[0].periods;
+
+export default function ClassRoutineView({ initialClassId }: { initialClassId?: string }) {
+  const queryClient = useQueryClient();
+  const [selectedClassId, setSelectedClassId] = useState(initialClassId || '');
+  const [selectedDay, setSelectedDay] = useState('SUNDAY');
+  const [viewTab, setViewTab] = useState<'editor' | 'timetable'>('editor');
+
+  // Dynamic Periods configuration (persists active school timings across classes and reloads)
+  const [periods, setPeriods] = useState<PeriodConfig[]>(() => getActiveDefaultPeriods());
+
+  // Days Checkbox state for repeating/applying routine
+  const [checkedDays, setCheckedDays] = useState<string[]>([
+    'SUNDAY',
+    'MONDAY',
+    'TUESDAY',
+    'WEDNESDAY',
+    'THURSDAY',
+    'FRIDAY',
+  ]);
+
+  // Routine Matrix state: [day_periodNumber] -> { subjectId, teacherId, roomNo, startTime, endTime }
+  const [routineGrid, setRoutineGrid] = useState<Record<string, { subjectId: string; teacherId: string; roomNo: string }>>({});
+
+  // Fetch Classes
+  const { data: classesData } = useQuery({
+    queryKey: ['classes'],
+    queryFn: async () => {
+      const res = await api.get('/classes');
+      return res.data?.data || [];
+    },
+  });
+
+  // Fetch Teachers
+  const { data: teachersData } = useQuery({
+    queryKey: ['teachers'],
+    queryFn: async () => {
+      const res = await api.get('/teachers');
+      return res.data?.data || [];
+    },
+  });
+
+  // Fetch all Subjects for fallback reference
+  const { data: subjectsData } = useQuery({
+    queryKey: ['subjects-all'],
+    queryFn: async () => {
+      const res = await api.get('/classes/subjects/all');
+      return res.data?.data || [];
+    },
+  });
+
+  // Fetch School Profile for print header
+  const { data: school } = useQuery({
+    queryKey: ['school-profile'],
+    queryFn: async () => {
+      const res = await api.get('/school/profile');
+      return res.data?.data;
+    },
+  });
+
+  // Fetch Active Academic Year for print header
+  const { data: activeYear } = useQuery({
+    queryKey: ['active-year'],
+    queryFn: async () => {
+      const res = await api.get('/academic-years/active');
+      return res.data?.data;
+    },
+  });
+
+
+  // Auto-select first class if none selected
+  useEffect(() => {
+    if (classesData && classesData.length > 0 && !selectedClassId) {
+      setSelectedClassId(classesData[0].id.toString());
+    }
+  }, [classesData, selectedClassId]);
+
+  // Fetch Routine for selected class
+  const { data: routineData, isLoading: isRoutineLoading } = useQuery({
+    queryKey: ['class-routine', selectedClassId],
+    queryFn: async () => {
+      if (!selectedClassId) return [];
+      const res = await api.get(`/routine/class/${selectedClassId}`);
+      return res.data?.data || [];
+    },
+    enabled: !!selectedClassId,
+  });
+
+  // Fetch Master Routine for conflict checking
+  const { data: allRoutinesData } = useQuery({
+    queryKey: ['all-routines'],
+    queryFn: async () => {
+      const res = await api.get('/routine/master');
+      return res.data?.data || [];
+    },
+  });
+
+  // Populate routineGrid and periods when routineData changes
+  useEffect(() => {
+    if (routineData && routineData.length > 0) {
+      const grid: Record<string, { subjectId: string; teacherId: string; roomNo: string }> = {};
+      const intToDay: Record<number, string> = {
+        1: 'SUNDAY',
+        2: 'MONDAY',
+        3: 'TUESDAY',
+        4: 'WEDNESDAY',
+        5: 'THURSDAY',
+        6: 'FRIDAY',
+        7: 'SATURDAY',
+      };
+
+      let maxPeriod = 0;
+      const loadedPeriodsMap: Record<number, { startTime: string; endTime: string; isBreak?: boolean; breakTitle?: string }> = {};
+
+      routineData.forEach((item: any) => {
+        const dayStr = typeof item.dayOfWeek === 'number' ? (intToDay[item.dayOfWeek] || 'SUNDAY') : item.dayOfWeek;
+        const periodNo = item.periodNo || item.periodNumber || 1;
+        if (periodNo > maxPeriod) maxPeriod = periodNo;
+
+        if (item.startTime || item.endTime) {
+          loadedPeriodsMap[periodNo] = {
+            startTime: item.startTime || '',
+            endTime: item.endTime || '',
+            isBreak: item.isBreak,
+            breakTitle: item.breakTitle,
+          };
+        }
+
+        const key = `${dayStr}_${periodNo}`;
+        grid[key] = {
+          subjectId: item.subjectId ? item.subjectId.toString() : '',
+          teacherId: item.teacherId ? item.teacherId.toString() : '',
+          roomNo: item.roomNo || '',
+        };
+      });
+
+      setRoutineGrid(grid);
+
+      // Adjust period list if routine has custom count
+      const periodCount = Math.max(maxPeriod, 4);
+      setPeriods((prevPeriods) => {
+        const fallbackList = (prevPeriods && prevPeriods.length > 0) ? prevPeriods : getActiveDefaultPeriods();
+        const newPeriods: PeriodConfig[] = [];
+        for (let i = 1; i <= periodCount; i++) {
+          const loaded = loadedPeriodsMap[i];
+          const fallback = fallbackList[i - 1] || STANDARD_SCHOOL_TIMINGS[i - 1];
+
+          // Guard against old corrupted 04:00 PM on period 5
+          const isCorruptedTime = (i === 5 && loaded?.startTime?.startsWith('04:'));
+
+          const validStartTime = (!isCorruptedTime && loaded?.startTime && loaded.startTime.trim().length > 0 && !loaded.startTime.startsWith('Period'))
+            ? loaded.startTime
+            : (fallback?.startTime || `10:${i * 40} AM`);
+
+          const validEndTime = (!isCorruptedTime && loaded?.endTime && loaded.endTime.trim().length > 0)
+            ? loaded.endTime
+            : (fallback?.endTime || '');
+
+          newPeriods.push({
+            num: i,
+            startTime: validStartTime,
+            endTime: validEndTime,
+            hasBreakAfter: loaded?.isBreak !== undefined ? loaded.isBreak : (fallback?.hasBreakAfter || (i === 4)),
+            breakTitle: loaded?.breakTitle || fallback?.breakTitle || (i === 4 ? 'खाजा समय (Tiffin Break)' : ''),
+            breakTime: fallback?.breakTime || (i === 4 ? '01:30 - 01:55 PM' : ''),
+          });
+        }
+        return newPeriods;
+      });
+    } else if (routineData && routineData.length === 0) {
+      // Clear grid for unconfigured class, but DO NOT reset active period timings!
+      setRoutineGrid({});
+      setPeriods((prev) => (prev && prev.length > 0 ? prev : getActiveDefaultPeriods()));
+    }
+  }, [routineData]);
+
+  const selectedClassObj = classesData?.find((c: any) => c.id.toString() === selectedClassId);
+
+  // ── STRICT CLASS-SPECIFIC SUBJECT FILTERING WITH ASSIGNED TEACHER ──
+  const classSubjects: any[] = (selectedClassObj?.subjects && selectedClassObj.subjects.length > 0)
+    ? selectedClassObj.subjects
+        .map((cs: any) => {
+          const sub = cs.subject || subjectsData?.find((s: any) => s.id === cs.subjectId);
+          if (!sub) return null;
+          const assignedTeacher = cs.teacher || teachersData?.find((t: any) => t.id === cs.teacherId);
+          return {
+            ...sub,
+            classSubjectId: cs.id,
+            assignedTeacherId: cs.teacherId || assignedTeacher?.id || null,
+            assignedTeacherName: assignedTeacher?.fullName || null,
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  // Check teacher conflict across other classes (returns full conflict details)
+  const checkConflict = (day: string, period: number, teacherIdStr: string | number) => {
+    if (!teacherIdStr || !allRoutinesData) return null;
+    const tid = parseInt(teacherIdStr.toString());
+    if (!tid) return null;
+
+    const dayIntMap: Record<string, number> = {
+      'SUNDAY': 1, 'MONDAY': 2, 'TUESDAY': 3, 'WEDNESDAY': 4, 'THURSDAY': 5, 'FRIDAY': 6, 'SATURDAY': 7
+    };
+    const targetDayInt = dayIntMap[day?.toUpperCase()] || (typeof day === 'number' ? day : 1);
+
+    const conflict = allRoutinesData.find((r: any) => {
+      // 1. MUST be another class (NEVER match the current selected class)
+      if (r.classId?.toString() === selectedClassId?.toString()) return false;
+      
+      // 2. MUST NOT be a break item
+      if (r.isBreak) return false;
+
+      // 3. MUST match the exact teacher
+      if (!r.teacherId || parseInt(r.teacherId) !== tid) return false;
+
+      // 4. MUST have a real subject or teacher entry (ignore empty slots)
+      if (!r.subjectId && !r.teacherId) return false;
+
+      // 5. MUST match the exact Period Number
+      const rPeriod = parseInt(r.periodNo || r.periodNumber);
+      if (rPeriod !== period) return false;
+
+      // 6. MUST match the exact Day of the week
+      const rDayInt = typeof r.dayOfWeek === 'number' ? r.dayOfWeek : dayIntMap[r.dayOfWeek?.toUpperCase()] || 0;
+      const isDayMatch = (rDayInt === targetDayInt) || (typeof r.dayOfWeek === 'string' && r.dayOfWeek.toUpperCase() === day.toUpperCase());
+      return isDayMatch;
+    });
+
+    if (!conflict) return null;
+
+    return {
+      className: conflict.class?.name || 'अर्को कक्षा',
+      teacherName: conflict.teacher?.fullName || 'शिक्षक',
+      subjectName: conflict.subject?.name || '',
+      periodNo: period,
+      day: day,
+    };
+  };
+
+  // Helper to check if a specific teacher is busy in a slot (returns conflicting class name or null)
+  const getTeacherConflictForSlot = (day: string, period: number, teacherId: string | number) => {
+    const res = checkConflict(day, period, teacherId);
+    return res ? res.className : null;
+  };
+
+  // Load Shift (checks for customized preset in localStorage first, falls back to default)
+  const handleLoadShift = (shiftId: string) => {
+    const loaded = getShiftPeriods(shiftId);
+    setPeriods(loaded);
+    const shiftName = shiftId === 'morning' ? 'बिहानी सत्र (Morning Shift)' : 'दिवा सत्र (Day Shift)';
+    toast.success(`'${shiftName}' को समय तालिका लोड गरियो!`);
+  };
+
+  // Save Current Periods as Custom Shift Preset
+  const handleSaveCurrentAsShiftPreset = (shiftId: string) => {
+    if (typeof window !== 'undefined') {
+      const key = shiftId === 'morning' ? SHIFT_STORAGE_KEYS.morning : SHIFT_STORAGE_KEYS.day;
+      localStorage.setItem(key, JSON.stringify(periods));
+    }
+    const shiftName = shiftId === 'morning' ? 'बिहानी सत्र (Morning Shift)' : 'दिवा सत्र (Day Shift)';
+    toast.success(`हालको घण्टी समयलाई '${shiftName}' ढाँचा (Preset) को रूपमा सुरक्षित गरियो! अब यो ढाँचा जहिले पनि लोड गर्न सकिनेछ।`);
+  };
+
+  // Reset Shift Preset to original factory default
+  const handleResetShiftPreset = (shiftId: 'day' | 'morning' | 'all') => {
+    if (typeof window !== 'undefined') {
+      if (shiftId === 'all') {
+        localStorage.removeItem(SHIFT_STORAGE_KEYS.day);
+        localStorage.removeItem(SHIFT_STORAGE_KEYS.morning);
+      } else {
+        localStorage.removeItem(shiftId === 'morning' ? SHIFT_STORAGE_KEYS.morning : SHIFT_STORAGE_KEYS.day);
+      }
+    }
+    toast.success('ढाँचा (Preset) पूर्वनिर्धारित मानकमा रिसेट गरियो!');
+  };
+
+  // Add new period to class
+  const handleAddPeriod = () => {
+    const nextNum = periods.length + 1;
+    const prevPeriod = periods[periods.length - 1];
+    let newStart = '';
+    let newEnd = '';
+
+    if (prevPeriod && prevPeriod.endTime) {
+      newStart = prevPeriod.endTime;
+      const start24 = toTimeInputValue(newStart);
+      if (start24) {
+        const [h, m] = start24.split(':').map(Number);
+        const totalMinutes = h * 60 + m + 40;
+        const newH = Math.floor(totalMinutes / 60) % 24;
+        const newM = totalMinutes % 60;
+        const time24Str = `${newH.toString().padStart(2, '0')}:${newM.toString().padStart(2, '0')}`;
+        newEnd = fromTimeInputValue(time24Str);
+      }
+    }
+
+    if (!newStart) {
+      const std = STANDARD_SCHOOL_TIMINGS[nextNum - 1];
+      newStart = std?.startTime || `0${nextNum}:00 PM`;
+      newEnd = std?.endTime || `0${nextNum}:40 PM`;
+    }
+
+    setPeriods([
+      ...periods,
+      {
+        num: nextNum,
+        startTime: newStart,
+        endTime: newEnd,
+        hasBreakAfter: false,
+      },
+    ]);
+    toast.success(`घण्टी ${nextNum} थपियो (Period ${nextNum} added)!`);
+  };
+
+  // Remove last period
+  const handleRemovePeriod = () => {
+    if (periods.length <= 1) {
+      toast.error('कम्तीमा १ घण्टी हुनै पर्छ।');
+      return;
+    }
+    const removedNum = periods.length;
+    setPeriods(periods.slice(0, -1));
+    toast.success(`घण्टी ${removedNum} हटाइयो।`);
+  };
+
+  // Set explicit period count (e.g., 5, 6, 7, 8)
+  const handleSetPeriodCount = (count: number) => {
+    if (count < 1 || count > 10) return;
+    setPeriods(() => {
+      const newPeriods: PeriodConfig[] = [];
+      for (let i = 1; i <= count; i++) {
+        const std = STANDARD_SCHOOL_TIMINGS[i - 1];
+        newPeriods.push({
+          num: i,
+          startTime: std.startTime,
+          endTime: std.endTime,
+          hasBreakAfter: std.hasBreakAfter || (i === 4),
+          breakTitle: std.breakTitle || (i === 4 ? 'खाजा समय (Tiffin Break)' : ''),
+          breakTime: std.breakTime || (i === 4 ? '01:30 - 01:55 PM' : ''),
+        });
+      }
+      return newPeriods;
+    });
+    toast.success(`यस कक्षाको लागि कुल ${count} घण्टी तालिका समायोजन गरियो!`);
+  };
+
+  // Update Period timing or Break settings
+  const handleUpdatePeriodConfig = (num: number, updates: Partial<PeriodConfig>) => {
+    setPeriods((prev) => {
+      const updated = prev.map((p) => (p.num === num ? { ...p, ...updates } : p));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('school_default_routine_timings', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  // Toggle single day checkbox
+  const toggleDayCheckbox = (dayKey: string) => {
+    setCheckedDays((prev) => {
+      const next = prev.includes(dayKey) ? prev.filter((d) => d !== dayKey) : [...prev, dayKey];
+      // If the currently selected day was unchecked, switch active day to first available checked day
+      if (prev.includes(dayKey) && selectedDay === dayKey && next.length > 0) {
+        setSelectedDay(next[0]);
+      }
+      return next;
+    });
+  };
+
+  // Only show the days which are checked above in the checkbox toolbar!
+  const displayDays = React.useMemo(() => {
+    return checkedDays.length > 0 ? DAYS.filter((d) => checkedDays.includes(d.key)) : DAYS;
+  }, [checkedDays]);
+
+  // Preset day selections
+  const selectPresetDays = (preset: 'SUN_THU' | 'SUN_FRI' | 'ALL' | 'CLEAR') => {
+    if (preset === 'SUN_THU') {
+      setCheckedDays(['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY']);
+    } else if (preset === 'SUN_FRI') {
+      setCheckedDays(['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY']);
+    } else if (preset === 'ALL') {
+      setCheckedDays(DAYS.map((d) => d.key));
+    } else if (preset === 'CLEAR') {
+      setCheckedDays([]);
+    }
+  };
+
+  // Copy routine from active selectedDay to all currently CHECKED days
+  const handleApplyToCheckedDays = () => {
+    if (checkedDays.length === 0) {
+      toast.error('कृपया कम्तीमा एउटा दिन छान्नुहोस् (Select at least one day).');
+      return;
+    }
+
+    setRoutineGrid((prev) => {
+      const next = { ...prev };
+      checkedDays.forEach((targetKey) => {
+        periods.forEach((p) => {
+          const sourceKey = `${selectedDay}_${p.num}`;
+          const destKey = `${targetKey}_${p.num}`;
+          if (next[sourceKey]) {
+            next[destKey] = { ...next[sourceKey] };
+          }
+        });
+      });
+      return next;
+    });
+
+    const srcName = DAYS.find((d) => d.key === selectedDay)?.name?.split(' ')[0] || selectedDay;
+    toast.success(`${srcName} को तालिका चयनित ${checkedDays.length} दिनहरूमा सफलतापूर्वक लागू गरियो!`);
+  };
+
+  // Toggle or assign current period's subject & teacher to/from a specific day
+  const handleToggleDayForPeriod = (periodNum: number, targetDayKey: string) => {
+    const sourceKey = `${selectedDay}_${periodNum}`;
+    const sourceCell = routineGrid[sourceKey];
+    if (!sourceCell || (!sourceCell.subjectId && !sourceCell.teacherId)) {
+      setSelectedDay(targetDayKey);
+      return;
+    }
+
+    const targetKey = `${targetDayKey}_${periodNum}`;
+    const targetCell = routineGrid[targetKey];
+    const isSameSubject = targetCell?.subjectId === sourceCell.subjectId && !!sourceCell.subjectId;
+
+    setRoutineGrid((prev) => {
+      const next = { ...prev };
+      if (isSameSubject && targetDayKey !== selectedDay) {
+        // Toggle OFF (clear target day for this period)
+        next[targetKey] = { subjectId: '', teacherId: '', roomNo: '' };
+      } else {
+        // Assign current subject and teacher to target day
+        next[targetKey] = { ...sourceCell };
+      }
+      return next;
+    });
+
+    const dayName = DAYS.find((d) => d.key === targetDayKey)?.short || targetDayKey;
+    const subName = classSubjects.find((s) => s.id.toString() === sourceCell.subjectId)?.name || 'विषय';
+    if (!isSameSubject || targetDayKey === selectedDay) {
+      toast.success(`घण्टी ${periodNum}: '${subName}' ${dayName} को लागि तोकियो!`, { id: `day-toggle-${periodNum}-${targetDayKey}`, duration: 2000 });
+    } else {
+      toast.success(`घण्टी ${periodNum}: ${dayName} बाट हटाइयो।`, { id: `day-toggle-${periodNum}-${targetDayKey}`, duration: 2000 });
+    }
+  };
+
+  // Apply current period to ALL checked days
+  const handleApplyPeriodToAllDays = (periodNum: number) => {
+    const sourceKey = `${selectedDay}_${periodNum}`;
+    const sourceCell = routineGrid[sourceKey];
+    if (!sourceCell || (!sourceCell.subjectId && !sourceCell.teacherId)) {
+      toast.error('कृपया पहिले विषय वा शिक्षक छान्नुहोस्।');
+      return;
+    }
+
+    setRoutineGrid((prev) => {
+      const next = { ...prev };
+      displayDays.forEach((d) => {
+        const destKey = `${d.key}_${periodNum}`;
+        next[destKey] = { ...sourceCell };
+      });
+      return next;
+    });
+
+    const subName = classSubjects.find((s) => s.id.toString() === sourceCell.subjectId)?.name || 'विषय';
+    toast.success(`घण्टी ${periodNum} (${subName}) चयनित सबै दिनहरूमा लागू गरियो!`);
+  };
+
+  // List all conflicts currently in routineGrid across the entire week
+  const currentGridConflicts = React.useMemo(() => {
+    const conflictsList: { dayKey: string; dayShort: string; periodNum: number; conflict: any }[] = [];
+    DAYS.forEach((d) => {
+      periods.forEach((p) => {
+        const key = `${d.key}_${p.num}`;
+        const cell = routineGrid[key];
+        if (cell && cell.teacherId) {
+          const conf = checkConflict(d.key, p.num, cell.teacherId);
+          if (conf) {
+            conflictsList.push({
+              dayKey: d.key,
+              dayShort: d.short,
+              periodNum: p.num,
+              conflict: conf,
+            });
+          }
+        }
+      });
+    });
+    return conflictsList;
+  }, [routineGrid, periods, allRoutinesData, selectedClassId]);
+
+  // Sync Timings Mutation — applies current period timings to ALL classes
+  const syncTimingsMutation = useMutation({
+    mutationFn: async () => {
+      const allClassIds = classesData?.map((c: any) => c.id) || [];
+      const res = await api.post('/routine/sync-timings', {
+        targetClassIds: allClassIds,
+        periods,
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      toast.success(data.message || 'घण्टी समय तालिका विद्यालयका सम्पूर्ण कक्षाहरूमा सफलतापूर्वक लागू भयो!');
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('school_default_routine_timings', JSON.stringify(periods));
+      }
+      queryClient.invalidateQueries({ queryKey: ['class-routine'] });
+      queryClient.invalidateQueries({ queryKey: ['all-routines'] });
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || 'घण्टी समय तालिका लागू गर्न सकिएन।');
+    },
+  });
+
+
+
+  // Copy Timing From Another Class
+  const handleCopyTimingFromClass = (sourceClassIdStr: string) => {
+    if (!sourceClassIdStr || !allRoutinesData) return;
+    const sourceRoutines = allRoutinesData.filter((r: any) => r.classId.toString() === sourceClassIdStr);
+    if (!sourceRoutines || sourceRoutines.length === 0) {
+      toast.error('चयन गरिएको कक्षामा कुनै रुटिन तालिका फेला परेन।');
+      return;
+    }
+
+    const maxPeriod = Math.max(...sourceRoutines.map((r: any) => r.periodNo || 1), 4);
+    const newPeriods: PeriodConfig[] = [];
+    for (let i = 1; i <= maxPeriod; i++) {
+      const match = sourceRoutines.find((r: any) => (r.periodNo || 1) === i && (r.startTime || r.endTime));
+      newPeriods.push({
+        num: i,
+        startTime: match?.startTime || `10:${i * 45} AM`,
+        endTime: match?.endTime || '',
+        hasBreakAfter: match?.isBreak || (i === 4),
+        breakTitle: match?.breakTitle || (i === 4 ? 'खाजा समय (Tiffin Break)' : ''),
+        breakTime: i === 4 ? '01:30 - 01:55 PM' : '',
+      });
+    }
+    setPeriods(newPeriods);
+    const srcClassName = classesData?.find((c: any) => c.id.toString() === sourceClassIdStr)?.name || 'Class';
+    toast.success(`${srcClassName} को घण्टी समय तालिका लोड गरियो!`);
+  };
+
+  // Batch Save Routine Mutation
+  const saveRoutineMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedClassId) throw new Error('Please select a class');
+
+      // Conflict warning check before saving
+      if (currentGridConflicts.length > 0) {
+        const conflictDescriptions = currentGridConflicts
+          .slice(0, 5)
+          .map((c) => `• ${c.conflict.teacherName} (${c.dayShort}, घण्टी ${c.periodNum}) ➜ ${c.conflict.className}`)
+          .join('\n');
+
+        const proceed = confirm(
+          `⚠️ शिक्षक समय द्वन्द्व भेटियो (Teacher Schedule Conflicts Detected):\n\n${conflictDescriptions}${
+            currentGridConflicts.length > 5 ? `\n... र थप ${currentGridConflicts.length - 5} वटा` : ''
+          }\n\nके तपाईं यद्यपि यो रुटिन सेभ गर्न अगाडि बढ्न चाहनुहुन्छ?`
+        );
+        if (!proceed) {
+          throw new Error('रुटिन सेभ रद्द गरियो। कृपया शिक्षकको समय जुधेको सच्याउनुहोस्।');
+        }
+      }
+
+      const entries: any[] = [];
+
+      DAYS.forEach((d) => {
+        periods.forEach((p) => {
+          const key = `${d.key}_${p.num}`;
+          const cell = routineGrid[key];
+          if (cell && (cell.subjectId || cell.teacherId)) {
+            entries.push({
+              classId: parseInt(selectedClassId),
+              dayOfWeek: d.key,
+              periodNumber: p.num,
+              startTime: p.startTime || '',
+              endTime: p.endTime || '',
+              isBreak: false,
+              subjectId: cell.subjectId ? parseInt(cell.subjectId) : null,
+              teacherId: cell.teacherId ? parseInt(cell.teacherId) : null,
+              roomNo: cell.roomNo || null,
+            });
+          }
+        });
+      });
+
+      const res = await api.post('/routine/batch-save', {
+        classId: parseInt(selectedClassId),
+        entries,
+        routines: entries,
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      toast.success(data.message || 'कक्षाको रुटिन सफलतापूर्वक सुरक्षित भयो!');
+      queryClient.invalidateQueries({ queryKey: ['class-routine', selectedClassId] });
+      queryClient.invalidateQueries({ queryKey: ['all-routines'] });
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.message || 'रुटिन सुरक्षित गर्न सकिएन।');
+    },
+  });
+
+  const handleCellChange = (day: string, periodNum: number, field: 'subjectId' | 'teacherId' | 'roomNo', val: string) => {
+    const key = `${day}_${periodNum}`;
+    setRoutineGrid((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        [field]: val,
+      },
+    }));
+
+    if (field === 'teacherId' && val) {
+      const conflict = checkConflict(day, periodNum, val);
+      if (conflict) {
+        const dayNepali = DAYS.find((d) => d.key === day)?.short || day;
+        toast.error(
+          `⚠️ शिक्षक जुध्यो (Conflict)! ${conflict.teacherName} ${dayNepali} को घण्टी ${periodNum} मा पहिले नै '${conflict.className}' मा तोकिनुभएको छ।`,
+          { duration: 5000, id: `conflict-teacher-${day}-${periodNum}` }
+        );
+      }
+    }
+  };
+
+  // When subject is changed, automatically fetch and select its assigned teacher for this class
+  const handleSubjectChange = (day: string, periodNum: number, subId: string) => {
+    const key = `${day}_${periodNum}`;
+    const matchedSubject = classSubjects.find((s: any) => s.id.toString() === subId);
+    const assignedTeacherId = matchedSubject?.assignedTeacherId ? matchedSubject.assignedTeacherId.toString() : '';
+
+    setRoutineGrid((prev) => {
+      const current = prev[key] || { subjectId: '', teacherId: '', roomNo: '' };
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          subjectId: subId,
+          // If a teacher was already assigned to this subject in the class, auto-assign
+          teacherId: assignedTeacherId || (subId ? current.teacherId : ''),
+        },
+      };
+    });
+
+    if (subId && assignedTeacherId) {
+      const conflict = checkConflict(day, periodNum, assignedTeacherId);
+      const dayNepali = DAYS.find((d) => d.key === day)?.short || day;
+      if (conflict) {
+        toast.error(
+          `⚠️ शिक्षक जुध्यो (Conflict)! ${conflict.teacherName} ${dayNepali} को घण्टी ${periodNum} मा पहिले नै '${conflict.className}' मा व्यस्त हुनुहुन्छ।`,
+          { duration: 5000, id: `conflict-${day}-${periodNum}` }
+        );
+      } else if (matchedSubject?.assignedTeacherName) {
+        toast.success(
+          `'${matchedSubject.name}' को शिक्षक '${matchedSubject.assignedTeacherName}' स्वतः छानियो!`,
+          { id: `auto-teacher-${periodNum}`, duration: 2500 }
+        );
+      }
+    }
+  };
+
+  const printClassRoutine = () => {
+    if (!selectedClassObj) return;
+    const printWin = window.open('', '_blank');
+    if (!printWin) {
+      window.print();
+      return;
+    }
+
+    const rowsHtml = displayDays.map((d) => {
+      const periodCells = periods.map((p) => {
+        const key = `${d.key}_${p.num}`;
+        const cell = routineGrid[key];
+        const sub = subjectsData?.find((s: any) => s.id.toString() === cell?.subjectId);
+        const teach = teachersData?.find((t: any) => t.id.toString() === cell?.teacherId);
+        return `
+          <td style="border: 1px solid #1e3a5f; padding: 6px 4px; text-align: center; vertical-align: middle; font-size: 10px;">
+            <div style="font-weight: bold; color: #1e3a5f; font-size: 10.5px; margin-bottom: 2px;">${sub?.name || '—'}</div>
+            <div style="font-size: 9.5px; color: #374151; font-weight: 600;">${teach?.fullName || ''}</div>
+          </td>
+        `;
+      }).join('');
+
+      return `
+        <tr>
+          <td style="border: 1px solid #1e3a5f; font-weight: bold; background: #f8fafc; padding: 6px; font-size: 11px;">
+            ${d.name.split(' ')[0]}
+          </td>
+          ${periodCells}
+        </tr>
+      `;
+    }).join('');
+
+    const periodHeaders = periods.map((p) => `
+      <th style="border: 1px solid #1e3a5f; background: #1e3a5f; color: #fff; padding: 6px 3px; font-size: 10px; text-align: center;">
+        Period ${p.num}<br/><span style="font-size: 8px; font-weight: normal; opacity: 0.9;">${p.startTime} - ${p.endTime}</span>
+      </th>
+    `).join('');
+
+    printWin.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Class Routine - ${selectedClassObj.name}</title>
+          <style>
+            @page { size: A4 landscape; margin: 10mm; }
+            * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; background: #fff; color: #111; }
+            .header { text-align: center; border-bottom: 2px solid #1e3a5f; padding-bottom: 8px; margin-bottom: 12px; }
+            .school-name { font-size: 16px; font-weight: 900; color: #1e3a5f; }
+            .meta { font-size: 12px; font-weight: bold; margin: 6px 0 12px 0; display: flex; justify-content: space-between; }
+            table { width: 100%; border-collapse: collapse; }
+            .footer { margin-top: 30px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="school-name">${school?.nameNepali || school?.name || ''}</div>
+            <div style="font-size: 11px; color: #555;">Class Routine & Timetable (दैनिक समय तालिका) • Academic Session ${activeYear?.year || ''}</div>
+          </div>
+
+          <div class="meta">
+            <div>Class: <strong>${selectedClassObj.name} ${selectedClassObj.section ? `(${selectedClassObj.section})` : ''}</strong></div>
+            <div>Class Teacher: <strong>${selectedClassObj.classTeacher?.fullName || '—'}</strong></div>
+            <div>Total Periods: <strong>${periods.length} Periods</strong></div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="border: 1px solid #1e3a5f; background: #1e3a5f; color: #fff; padding: 6px; font-size: 10px; width: 80px;">Day / बार</th>
+                ${periodHeaders}
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+
+          <div class="footer">
+            <div>Academic In-Charge</div>
+            <div>Class Teacher</div>
+            <div>Headmaster / Principal</div>
+          </div>
+
+          <script>
+            window.onload = function() { setTimeout(function() { window.print(); }, 400); };
+          </script>
+        </body>
+      </html>
+    `);
+    printWin.document.close();
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Action Header inside tab */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-2xs">
+        <div>
+          <h2 className="text-base font-extrabold text-[#1e3a5f] flex items-center gap-2">
+            <Clock className="text-[#1e3a5f]" size={18} />
+            <span>Class Routine & Timetable (दैनिक समय तालिका)</span>
+          </h2>
+          <p className="text-xs text-gray-500 font-nepali mt-0.5">
+            समय तालिका निर्धारण, खाजा समय, शिक्षक अटो-चयन र सम्पूर्ण साप्ताहिक रुटिन
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* View Mode Switcher */}
+          <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-gray-200">
+            <button
+              onClick={() => setViewTab('editor')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewTab === 'editor' ? 'bg-[#1e3a5f] text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Edit3 size={13} />
+              <span>घण्टी सम्पादक (Editor)</span>
+            </button>
+            <button
+              onClick={() => setViewTab('timetable')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                viewTab === 'timetable' ? 'bg-[#1e3a5f] text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Table size={13} />
+              <span>साप्ताहिक तालिका (Timetable)</span>
+            </button>
+          </div>
+
+          <button
+            onClick={printClassRoutine}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3.5 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-50 transition shadow-2xs cursor-pointer"
+          >
+            <Printer size={14} className="text-blue-600" />
+            <span>Print (प्रिन्ट)</span>
+          </button>
+
+          <button
+            disabled={saveRoutineMutation.isPending}
+            onClick={() => saveRoutineMutation.mutate()}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1e3a5f] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#2a5280] transition shadow-xs disabled:opacity-60 cursor-pointer"
+          >
+            <Save size={14} />
+            <span>{saveRoutineMutation.isPending ? 'Saving...' : 'Save Routine (सेभ गर्नुहोस्)'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Class Selector Bar & Periods Count Manager */}
+      <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-2xs space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+          <div className="md:col-span-4 flex items-center gap-2.5">
+            <label className="text-xs font-bold text-gray-700 whitespace-nowrap flex items-center gap-1">
+              <School size={14} className="text-[#1e3a5f]" />
+              <span>कक्षा छान्नुहोस् (Class):</span>
+            </label>
+            <select
+              value={selectedClassId}
+              onChange={(e) => setSelectedClassId(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 bg-slate-50 px-3 py-2 text-xs font-bold text-[#1e3a5f] focus:bg-white focus:outline-hidden"
+            >
+              {classesData?.map((c: any) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} {c.section ? `(${c.section})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Quick Period Count Selector & Dynamic Period Controls */}
+          <div className="md:col-span-8 flex flex-wrap items-center justify-start md:justify-end gap-1.5">
+            <div className="flex items-center gap-1 bg-slate-100 border border-gray-200 px-2.5 py-1 rounded-xl text-xs">
+              <Sliders size={13} className="text-gray-600" />
+              <span className="font-bold text-gray-700">घण्टी संख्या:</span>
+              <span className="font-black text-[#1e3a5f] px-1.5 py-0.5 bg-blue-100 rounded-md text-xs">
+                {periods.length} घण्टी
+              </span>
+            </div>
+
+            {/* Dynamic Period Add / Remove Controls */}
+            <button
+              type="button"
+              onClick={handleAddPeriod}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold hover:bg-emerald-100 transition cursor-pointer"
+              title="Add another period for this class"
+            >
+              <Plus size={14} />
+              <span>+ घण्टी थप्नुहोस्</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRemovePeriod}
+              disabled={periods.length <= 1}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-rose-50 text-rose-800 border border-rose-200 text-xs font-bold hover:bg-rose-100 transition cursor-pointer disabled:opacity-40"
+              title="Remove last period"
+            >
+              <Trash2 size={14} />
+              <span>- घटाउनुहोस्</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── TIME & BREAKS SCHEDULE CONFIGURATOR ─── */}
+      <div className="bg-white border border-gray-100 p-4 rounded-2xl shadow-2xs space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-gray-100 pb-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-blue-600" />
+              <h3 className="text-xs font-black text-gray-900">
+                घण्टी समय तालिका (School Bell & Break Timings)
+              </h3>
+            </div>
+            <p className="text-[11px] text-gray-500 font-nepali">
+              समय तालिका एक पटक मिलाएर <strong>"सबै कक्षामा लागू"</strong> गर्न सक्नुहुन्छ, अथवा कक्षा अनुसार फरक समय राख्न सक्नुहुन्छ।
+            </p>
+          </div>
+
+          {/* 2 Shift Buttons, Save Preset and Bulk Sync Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* 2 Shifts Buttons */}
+            <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-gray-200 gap-1">
+              <button
+                type="button"
+                onClick={() => handleLoadShift('day')}
+                className="px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-[#1e3a5f] hover:bg-blue-50 text-xs font-bold transition shadow-2xs cursor-pointer"
+                title="दिवा सत्र ढाँचा लोड गर्नुहोस् (Load Day Shift: 10:25 AM)"
+              >
+                ☀️ दिवा सत्र (Day Shift)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLoadShift('morning')}
+                className="px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-[#1e3a5f] hover:bg-blue-50 text-xs font-bold transition shadow-2xs cursor-pointer"
+                title="बिहानी सत्र ढाँचा लोड गर्नुहोस् (Load Morning Shift: 06:30 AM)"
+              >
+                🌅 बिहानी सत्र (Morning Shift)
+              </button>
+            </div>
+
+            {/* Save Current Time as Custom Preset for Day/Morning Shift */}
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === 'save-day') handleSaveCurrentAsShiftPreset('day');
+                else if (val === 'save-morning') handleSaveCurrentAsShiftPreset('morning');
+                else if (val === 'reset-all') handleResetShiftPreset('all');
+                e.target.value = '';
+              }}
+              className="rounded-xl border border-indigo-200 bg-indigo-50/90 px-2.5 py-1.5 text-xs font-bold text-indigo-900 hover:bg-indigo-100 focus:outline-hidden cursor-pointer"
+              title="Save current periods as reusable Shift Preset"
+            >
+              <option value="" disabled>💾 यो समयलाई सत्र ढाँचामा सेभ गर्नुहोस् (Save Preset)...</option>
+              <option value="save-day">☀️ हालको समयलाई 'दिवा सत्र' ढाँचामा सेभ गर्नुहोस्</option>
+              <option value="save-morning">🌅 हालको समयलाई 'बिहानी सत्र' ढाँचामा सेभ गर्नुहोस्</option>
+              <option value="reset-all">🔄 ढाँचा मानकमा रिसेट गर्नुहोस् (Reset Defaults)</option>
+            </select>
+
+            {/* Bulk Sync Action */}
+            <button
+              type="button"
+              disabled={syncTimingsMutation.isPending}
+              onClick={() => {
+                if (confirm('के तपाईं यो घण्टी समय तालिका विद्यालयका सम्पूर्ण कक्षाहरूमा लागू गर्न चाहनुहुन्छ? (Sync bell timings to ALL classes?)')) {
+                  syncTimingsMutation.mutate();
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-xs transition cursor-pointer disabled:opacity-50"
+              title="Apply currently defined period start/end timings to all classes"
+            >
+              <Zap size={14} className={syncTimingsMutation.isPending ? 'animate-pulse' : ''} />
+              <span>{syncTimingsMutation.isPending ? 'लागू हुँदैछ...' : '⚡ सबै कक्षामा यो समय लागू गर्नुहोस् (Sync to All)'}</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {periods.map((p) => (
+            <div
+              key={p.num}
+              className={`p-3 rounded-xl border text-xs space-y-2.5 transition ${
+                p.hasBreakAfter ? 'bg-amber-50/40 border-amber-200' : 'bg-slate-50/60 border-gray-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-extrabold text-[#1e3a5f]">घण्टी {p.num} (Period {p.num})</span>
+                {p.hasBreakAfter && (
+                  <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Coffee size={11} />
+                    <span>खाजा समय</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Start & End Time Inputs using Time format */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] font-bold text-gray-500 uppercase">From (सुरु):</label>
+                    <span className="text-[10px] font-mono font-bold text-[#1e3a5f]">{p.startTime}</span>
+                  </div>
+                  <input
+                    type="time"
+                    value={toTimeInputValue(p.startTime)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        handleUpdatePeriodConfig(p.num, { startTime: fromTimeInputValue(val) });
+                      }
+                    }}
+                    className="w-full px-2 py-1 text-xs font-semibold rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] font-bold text-gray-500 uppercase">To (अन्त्य):</label>
+                    <span className="text-[10px] font-mono font-bold text-[#1e3a5f]">{p.endTime}</span>
+                  </div>
+                  <input
+                    type="time"
+                    value={toTimeInputValue(p.endTime)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val) {
+                        handleUpdatePeriodConfig(p.num, { endTime: fromTimeInputValue(val) });
+                      }
+                    }}
+                    className="w-full px-2 py-1 text-xs font-semibold rounded-lg border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* Break toggle after this period */}
+              <div className="pt-1.5 border-t border-gray-200/60 space-y-1.5">
+                <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={!!p.hasBreakAfter}
+                    onChange={(e) =>
+                      handleUpdatePeriodConfig(p.num, {
+                        hasBreakAfter: e.target.checked,
+                        breakTitle: e.target.checked ? (p.breakTitle || 'खाजा समय (Tiffin Break)') : '',
+                        breakTime: e.target.checked ? (p.breakTime || '01:15 - 01:45 PM') : '',
+                      })
+                    }
+                    className="rounded text-amber-600 focus:ring-amber-500 h-3.5 w-3.5"
+                  />
+                  <span>यस पछि खाजा/विश्राम छ?</span>
+                </label>
+
+                {p.hasBreakAfter && (
+                  <div className="grid grid-cols-2 gap-1 pt-1">
+                    <input
+                      type="text"
+                      value={p.breakTitle || ''}
+                      onChange={(e) => handleUpdatePeriodConfig(p.num, { breakTitle: e.target.value })}
+                      placeholder="खाजा समय"
+                      className="w-full px-1.5 py-0.5 text-[10px] font-medium rounded border border-amber-300 bg-white"
+                    />
+                    <input
+                      type="text"
+                      value={p.breakTime || ''}
+                      onChange={(e) => handleUpdatePeriodConfig(p.num, { breakTime: e.target.value })}
+                      placeholder="01:15 - 01:45 PM"
+                      className="w-full px-1.5 py-0.5 text-[10px] font-medium rounded border border-amber-300 bg-white"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ─── DAYS CHECKBOX TOOLBAR ─── */}
+      <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-blue-50/90 border border-blue-200 p-4 rounded-2xl shadow-2xs space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2 text-xs font-black text-[#1e3a5f]">
+              <CheckSquare size={16} className="text-blue-700" />
+              <span>रुटिन दोहोर्‍याउने दिनहरू (Repeat Routine Days):</span>
+            </div>
+            <p className="text-[11px] text-gray-600 font-nepali">
+              कुन-कुन दिन कक्षा सञ्चालन हुन्छ, टिक लगाउनुहोस् र <strong className="text-blue-900">{DAYS.find((d) => d.key === selectedDay)?.name.split(' ')[0]}</strong> को रुटिन एकै क्लिकमा लागू गर्नुहोस्।
+            </p>
+          </div>
+        </div>
+
+        {/* Days Checkboxes Row */}
+        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-blue-100">
+          {DAYS.map((d) => {
+            const isChecked = checkedDays.includes(d.key);
+            const isCurrentActiveDay = selectedDay === d.key;
+            return (
+              <label
+                key={d.key}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold transition cursor-pointer select-none ${
+                  isChecked
+                    ? 'bg-white border-blue-400 text-blue-900 shadow-2xs ring-1 ring-blue-300'
+                    : 'bg-white/60 border-gray-200 text-gray-600 hover:bg-white'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => toggleDayCheckbox(d.key)}
+                  className="rounded text-blue-600 focus:ring-blue-500 h-4 w-4"
+                />
+                <span>{d.name}</span>
+                {isCurrentActiveDay && (
+                  <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                    Active
+                  </span>
+                )}
+              </label>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={handleApplyToCheckedDays}
+            className="ml-auto inline-flex items-center gap-1.5 bg-[#1e3a5f] hover:bg-[#2a5280] text-white px-4 py-2 rounded-xl text-xs font-black transition shadow-xs cursor-pointer"
+          >
+            <Copy size={14} />
+            <span>चयनित सबै दिनहरूमा तालिका लागू गर्नुहोस् (Apply to Checked Days)</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ─── TAB 1: PERIOD-BY-PERIOD EDITOR (घण्टी सम्पादक) ─── */}
+      {viewTab === 'editor' && (
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-2xs space-y-6">
+          {/* Day Navigation Bar */}
+          <div className="flex flex-wrap items-center justify-between border-b border-gray-100 pb-3 gap-3">
+            <div>
+              <h3 className="text-sm font-extrabold text-[#1e3a5f]">
+                {DAYS.find((d) => d.key === selectedDay)?.name} — घण्टी विभाजन (Period Allocation)
+              </h3>
+              <p className="text-[11px] text-gray-500 font-nepali">
+                कक्षा <strong className="text-gray-800">{selectedClassObj?.name}</strong> मा दर्ता गरिएका सूचीकृत विषयहरू ({classSubjects.length} विषय) तथा शिक्षक तोक्नुहोस्
+              </p>
+            </div>
+
+            {/* Day Selector Buttons - strictly show only checked days */}
+            <div className="flex flex-wrap rounded-xl bg-slate-100 p-1 text-xs font-bold gap-1">
+              {displayDays.map((d) => (
+                <button
+                  key={d.key}
+                  onClick={() => setSelectedDay(d.key)}
+                  className={`rounded-lg px-3 py-1.5 transition text-[11px] font-bold cursor-pointer ${
+                    selectedDay === d.key ? 'bg-[#1e3a5f] text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {d.short} ({d.name.split(' ')[0]})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Warning if no subjects entered for this class */}
+          {classSubjects.length === 0 && (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-start gap-3">
+              <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold">
+                  यस कक्षा ({selectedClassObj?.name}) मा हालसम्म कुनै पनि विषय दर्ता गरिएको छैन।
+                </p>
+                <p className="text-[11px] text-amber-800 leading-relaxed font-nepali">
+                  रुटिन बनाउनका लागि पहिले कक्षामा विषय र शिक्षक दर्ता हुनुपर्दछ। कृपया माथिको &quot;Classes &amp; Sections&quot; ट्याबमा गएर विषयहरू थप्नुहोस्।
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Period Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {periods.map((period) => {
+              const key = `${selectedDay}_${period.num}`;
+              const cell = routineGrid[key] || { subjectId: '', teacherId: '', roomNo: '' };
+              const conflictInfo = checkConflict(selectedDay, period.num, cell.teacherId);
+
+              // Gather other checked days assignments for this period to help with alternating/split subjects
+              const otherDaysSummary = displayDays
+                .filter((d) => d.key !== selectedDay)
+                .map((d) => {
+                  const oKey = `${d.key}_${period.num}`;
+                  const oCell = routineGrid[oKey];
+                  const oSub = subjectsData?.find((s: any) => s.id.toString() === oCell?.subjectId);
+                  const oTeach = teachersData?.find((t: any) => t.id.toString() === oCell?.teacherId);
+                  return oSub ? { dayShort: d.short, dayKey: d.key, subName: oSub.name, teachName: oTeach?.fullName || '' } : null;
+                })
+                .filter(Boolean);
+
+              return (
+                <div
+                  key={period.num}
+                  className={`rounded-2xl border p-4 space-y-3 transition relative flex flex-col justify-between ${
+                    conflictInfo
+                      ? 'border-red-400 bg-red-50/50 ring-2 ring-red-300 shadow-xs'
+                      : cell.subjectId
+                      ? 'border-blue-200 bg-blue-50/20'
+                      : 'border-gray-200 bg-slate-50/50 hover:bg-white'
+                  }`}
+                >
+                  <div className="space-y-3">
+                    {/* Period Badge & Timing */}
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs text-[#1e3a5f] bg-white px-2.5 py-0.5 rounded-lg border border-gray-200 shadow-2xs">
+                        घण्टी {period.num} (Period {period.num})
+                      </span>
+                      <span className="text-[10px] font-mono text-gray-500 font-semibold">
+                        {period.startTime} - {period.endTime}
+                      </span>
+                    </div>
+
+                    {/* Tiffin / Break Alert */}
+                    {period.hasBreakAfter && (
+                      <div className="text-[10px] font-bold text-amber-800 bg-amber-50 rounded-lg p-1 text-center border border-amber-200 flex items-center justify-center gap-1">
+                        <Coffee size={12} />
+                        <span>{period.breakTitle || 'खाजा समय'} ({period.breakTime || 'Break'})</span>
+                      </div>
+                    )}
+
+                    {/* Subject Selector (filtered STRICTLY to this class list) */}
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-1 flex items-center justify-between">
+                        <span>Subject (यस कक्षाका विषय)</span>
+                        <span className="text-[9px] text-gray-400">({classSubjects.length} उपलब्ध)</span>
+                      </label>
+                      <select
+                        value={cell.subjectId}
+                        onChange={(e) => handleSubjectChange(selectedDay, period.num, e.target.value)}
+                        className={`w-full rounded-xl border p-2 text-xs font-bold text-gray-800 focus:border-[#1e3a5f] focus:outline-hidden ${
+                          cell.subjectId ? 'bg-white border-blue-300' : 'bg-white border-gray-200'
+                        }`}
+                      >
+                        <option value="">-- खाली / No Class --</option>
+                        {classSubjects.map((sub: any) => {
+                          const isTeacherBusy = sub.assignedTeacherId ? getTeacherConflictForSlot(selectedDay, period.num, sub.assignedTeacherId) : null;
+                          return (
+                            <option key={sub.id} value={sub.id}>
+                              {sub.name} {sub.code ? `(${sub.code})` : ''} 
+                              {sub.assignedTeacherName ? ` — 👤 ${sub.assignedTeacherName}` : ''}
+                              {isTeacherBusy ? ` [⚠️ ${isTeacherBusy} मा व्यस्त]` : ''}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Teacher Selector with collision indicators */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-1 flex items-center justify-between">
+                        <span>Teacher (तोकिएका शिक्षक)</span>
+                        {cell.teacherId && !conflictInfo && (
+                          <span className="text-[9px] text-emerald-700 font-bold">✓ शिक्षक उपलब्ध</span>
+                        )}
+                        {conflictInfo && (
+                          <span className="text-[9px] text-red-700 font-bold">⚠️ समय जुध्यो</span>
+                        )}
+                      </label>
+                      <select
+                        value={cell.teacherId}
+                        onChange={(e) => handleCellChange(selectedDay, period.num, 'teacherId', e.target.value)}
+                        className={`w-full rounded-xl border p-2 text-xs font-semibold text-gray-800 focus:border-[#1e3a5f] focus:outline-hidden ${
+                          conflictInfo
+                            ? 'bg-red-50 border-red-400 text-red-900 font-bold'
+                            : 'bg-white border-gray-200'
+                        }`}
+                      >
+                        <option value="">-- शिक्षक छान्नुहोस् --</option>
+                        {teachersData?.map((t: any) => {
+                          const busyClass = getTeacherConflictForSlot(selectedDay, period.num, t.id);
+                          return (
+                            <option key={t.id} value={t.id}>
+                              {t.fullName} {busyClass ? ` [⚠️ ${busyClass} मा व्यस्त]` : ' ✓ उपलब्ध'}
+                            </option>
+                          );
+                        })}
+                      </select>
+
+                      {/* Auto-Assigned Teacher Helper Info */}
+                      {(() => {
+                        const matchedSub = classSubjects.find((s: any) => s.id.toString() === cell.subjectId);
+                        if (!matchedSub?.assignedTeacherName) return null;
+                        const isAutoMatched = cell.teacherId === matchedSub.assignedTeacherId?.toString();
+                        return (
+                          <div className={`flex items-center justify-between text-[10px] font-semibold px-2 py-0.5 rounded-md border mt-1 ${
+                            isAutoMatched ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'
+                          }`}>
+                            <span className="flex items-center gap-1 truncate">
+                              <Sparkles size={10} className={isAutoMatched ? 'text-emerald-600 shrink-0' : 'text-amber-600 shrink-0'} />
+                              <span>विषय शिक्षक: {matchedSub.assignedTeacherName}</span>
+                            </span>
+                            {!isAutoMatched && (
+                              <button
+                                type="button"
+                                onClick={() => handleCellChange(selectedDay, period.num, 'teacherId', matchedSub.assignedTeacherId?.toString() || '')}
+                                className="text-[9px] text-blue-700 underline font-bold hover:text-blue-900 shrink-0 ml-1 cursor-pointer"
+                              >
+                                स्वतः मिलाउनुहोस्
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Prominent Conflict Alert Banner */}
+                    {conflictInfo && (
+                      <div className="rounded-xl bg-red-100 border border-red-300 p-2 text-[10px] font-bold text-red-900 flex items-start gap-1.5 animate-pulse">
+                        <AlertTriangle size={15} className="text-red-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <div className="font-extrabold text-red-950">समय जुध्यो (Teacher Conflict)!</div>
+                          <div>
+                            शिक्षक <strong>{conflictInfo.teacherName}</strong> यस दिनको घण्टी {period.num} मा पहिले नै <strong>'{conflictInfo.className}'</strong> मा व्यस्त हुनुहुन्छ।
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+
+                  {/* ─── INTERACTIVE DAY SELECTOR FOR THIS SUBJECT (Filtered by Checked Days) ─── */}
+                  <div className="pt-2.5 border-t border-gray-100 space-y-2 mt-2">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-gray-700">
+                      <span className="flex items-center gap-1">
+                        <Calendar size={12} className="text-blue-600" />
+                        <span>यो विषय कुन-कुन दिन पढाउने? (Select Days):</span>
+                      </span>
+                      {cell.subjectId && (
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPeriodToAllDays(period.num)}
+                          className="text-[9px] font-bold text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                          title="Apply this subject to all checked school days"
+                        >
+                          सबै दिन लागू
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Interactive Days Row (Only Checked Days) */}
+                    <div className="flex flex-wrap gap-1">
+                      {displayDays.map((d) => {
+                        const dKey = `${d.key}_${period.num}`;
+                        const dCell = routineGrid[dKey];
+                        const hasCurrentSubject = !!(cell.subjectId && dCell?.subjectId === cell.subjectId);
+                        const hasOtherSubject = !!(dCell?.subjectId && dCell.subjectId !== cell.subjectId);
+                        const isSelectedDay = selectedDay === d.key;
+                        const otherSub = hasOtherSubject ? classSubjects.find((s) => s.id.toString() === dCell?.subjectId) : null;
+
+                        return (
+                          <button
+                            key={d.key}
+                            type="button"
+                            onClick={() => {
+                              if (hasOtherSubject && !isSelectedDay) {
+                                setSelectedDay(d.key);
+                              } else {
+                                handleToggleDayForPeriod(period.num, d.key);
+                              }
+                            }}
+                            className={`flex-1 min-w-[36px] py-1.5 px-1 rounded-lg text-[10px] font-black transition flex flex-col items-center justify-center border cursor-pointer ${
+                              isSelectedDay
+                                ? 'ring-2 ring-[#1e3a5f] bg-[#1e3a5f] text-white border-[#1e3a5f] shadow-xs'
+                                : hasCurrentSubject
+                                ? 'bg-emerald-50 text-emerald-900 border-emerald-300 font-bold hover:bg-emerald-100'
+                                : hasOtherSubject
+                                ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                                : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-100'
+                            }`}
+                            title={
+                              hasOtherSubject
+                                ? `${d.name}: '${otherSub?.name || 'अर्को विषय'}' तोकिएको छ (क्लिक गरी ${d.short} मा जानुहोस्)`
+                                : hasCurrentSubject
+                                ? `${d.name}: यो विषय तोकिएको छ (क्लिक गरी हटाउनुहोस्)`
+                                : `${d.name}: खाली (क्लिक गरी यो विषय तोक्नुहोस्)`
+                            }
+                          >
+                            <span>{d.short}</span>
+                            {hasCurrentSubject && !isSelectedDay && <span className="text-[8px] text-emerald-700">✓</span>}
+                            {hasOtherSubject && !isSelectedDay && <span className="text-[7px] text-amber-700 truncate max-w-full font-bold">फरक</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Alternating Subjects Summary */}
+                    {otherDaysSummary.length > 0 && (
+                      <div className="rounded-lg bg-slate-50 border border-gray-200/80 p-1.5 text-[9px] text-gray-600 space-y-0.5">
+                        <div className="font-bold text-gray-700 flex items-center justify-between">
+                          <span>📅 अन्य दिनका विषय (Other Days):</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {otherDaysSummary.map((od: any, idx: number) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setSelectedDay(od.dayKey)}
+                              className="px-1.5 py-0.5 bg-white rounded border border-gray-200 text-[9px] font-semibold text-[#1e3a5f] hover:bg-blue-50 cursor-pointer"
+                              title={`Click to edit ${od.dayShort}`}
+                            >
+                              {od.dayShort}: <strong>{od.subName}</strong> {od.teachName ? `(${od.teachName})` : ''}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── TAB 2: FULL WEEKLY TIMETABLE MATRIX (सम्पूर्ण साप्ताहिक समय तालिका) ─── */}
+      {viewTab === 'timetable' && (
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-2xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-3 gap-3">
+            <div>
+              <h3 className="text-base font-extrabold text-[#1e3a5f]">
+                {selectedClassObj?.name} — Full Weekly Timetable Matrix (सम्पूर्ण साप्ताहिक तालिका)
+              </h3>
+              <p className="text-xs text-gray-500 font-nepali">
+                कुनै पनि कोठा (Cell) मा क्लिक गरी सो दिनको रुटिन तुरुन्तै सम्पादन गर्न सक्नुहुन्छ।
+              </p>
+            </div>
+            <button
+              onClick={printClassRoutine}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3.5 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-50 transition shadow-2xs cursor-pointer"
+            >
+              <Printer size={13} className="text-blue-600" />
+              <span>प्रिन्ट गर्नुहोस्</span>
+            </button>
+          </div>
+
+          <div className="overflow-x-auto border border-gray-200 rounded-2xl shadow-2xs">
+            <table className="w-full border-collapse text-left text-xs">
+              <thead>
+                <tr className="bg-[#1e3a5f] text-white">
+                  <th className="p-3 border-r border-[#2a5280] font-black w-24">Day / बार</th>
+                  {periods.map((p) => (
+                    <th key={p.num} className="p-2.5 border-r border-[#2a5280] text-center font-bold">
+                      <div>Period {p.num}</div>
+                      <div className="text-[10px] font-normal opacity-85">{p.startTime} - {p.endTime}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {displayDays.map((d) => (
+                  <tr key={d.key} className="hover:bg-blue-50/20 transition">
+                    <td
+                      onClick={() => {
+                        setSelectedDay(d.key);
+                        setViewTab('editor');
+                      }}
+                      className="p-3 font-extrabold text-[#1e3a5f] bg-slate-50 border-r border-gray-200 cursor-pointer hover:bg-blue-100 transition"
+                      title="Click to edit this day in Editor"
+                    >
+                      <div>{d.name.split(' ')[0]}</div>
+                      <div className="text-[10px] text-gray-400 font-normal">{d.short} (सम्पादन ✍️)</div>
+                    </td>
+                    {periods.map((p) => {
+                      const key = `${d.key}_${p.num}`;
+                      const cell = routineGrid[key];
+                      const sub = subjectsData?.find((s: any) => s.id.toString() === cell?.subjectId);
+                      const teach = teachersData?.find((t: any) => t.id.toString() === cell?.teacherId);
+                      const cellConflict = checkConflict(d.key, p.num, cell?.teacherId);
+
+                      return (
+                        <td
+                          key={p.num}
+                          onClick={() => {
+                            setSelectedDay(d.key);
+                            setViewTab('editor');
+                          }}
+                          className={`p-2.5 border-r border-gray-100 text-center align-middle cursor-pointer transition ${
+                            cellConflict
+                              ? 'bg-red-100/70 hover:bg-red-100'
+                              : sub
+                              ? 'hover:bg-blue-50/60'
+                              : 'hover:bg-gray-50'
+                          }`}
+                          title={cellConflict ? `⚠️ ${cellConflict.teacherName} ${cellConflict.className} मा व्यस्त` : 'क्लिक गरी सम्पादन गर्नुहोस्'}
+                        >
+                          {sub ? (
+                            <div className="space-y-0.5">
+                              <div className="font-bold text-gray-900">{sub.name}</div>
+                              {teach && (
+                                <div className={`text-[10px] font-medium ${cellConflict ? 'text-red-800 font-bold' : 'text-blue-700'}`}>
+                                  {cellConflict ? `⚠️ ${teach.fullName} (${cellConflict.className})` : teach.fullName}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-300 font-light">+ खाली</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

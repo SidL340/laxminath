@@ -1,0 +1,267 @@
+@import url('https://fonts.googleapis.com/css2?family=Alex+Brush&family=Anek+Devanagari:wght@400;600;700;800&family=Bebas+Neue&family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;700;800;900&family=Courier+Prime:wght@400;700&family=Dancing+Script:wght@600;700&family=EB+Garamond:ital,wght@0,500;0,700;1,500&family=Great+Vibes&family=Martel:wght@600;800&family=MedievalSharp&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Montserrat:wght@600;700;800;900&family=Mukta:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700;800;900&family=Noto+Serif+Devanagari:wght@500;600;700;800;900&family=Oswald:wght@500;700&family=Outfit:wght@600;700;800&family=Parisienne&family=Pinyon+Script&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&family=Poppins:wght@400;500;600;700;800&family=Rozha+One&family=Satisfy&family=UnifrakturMaguntia&family=Yatra+One&display=swap');
+@import "tailwindcss";
+
+:root {
+  --color-primary: #1e3a5f;
+  --color-primary-light: #2d5986;
+  --color-accent: #f59e0b;
+  --color-sidebar-bg: #1e3a5f;
+  --color-sidebar-text: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Universal Ergonomic Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #e2e8f0;
+  -webkit-overflow-scrolling: touch;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 6px;
+  border: 2px solid #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #1e3a5f;
+}
+
+/* Enhanced Horizontal & Table Scrollbars */
+.overflow-x-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+table::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border-radius: 6px;
+  border: 2px solid #f8fafc;
+}
+
+.overflow-x-auto::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Print styles */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print,
+  aside,
+  header,
+  nav,
+  button,
+  .sidebar,
+  .header,
+  .modal-backdrop {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Ensure printable area starts from top-left without any margin/offset cuts */
+  .printable-document,
+  .printable-area {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    page-break-inside: avoid !important;
+  }
+}
+
+.print-only { display: none; }
+
+/* Nepali font support */
+.font-nepali {
+  font-family: 'Noto Sans Devanagari', 'Mangal', serif;
+}
+
+/* Table styles */
+.erp-table {
+  @apply w-full text-sm text-left;
+}
+.erp-table thead tr {
+  @apply bg-[#1e3a5f] text-white;
+}
+.erp-table thead th {
+  @apply px-4 py-3 font-semibold text-xs uppercase tracking-wide;
+}
+.erp-table tbody tr {
+  @apply border-b border-gray-100 hover:bg-blue-50 transition-colors;
+}
+.erp-table tbody td {
+  @apply px-4 py-3 text-gray-700;
+}
+
+/* Form inputs */
+.erp-input {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1e3a5f] focus:border-transparent transition-all;
+}
+
+.erp-label {
+  @apply block text-sm font-medium text-gray-700 mb-1;
+}
+
+/* Card */
+.erp-card {
+  @apply bg-white rounded-xl shadow-sm border border-gray-100 p-5;
+}
+
+/* Badge */
+.badge-blue { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800; }
+.badge-green { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800; }
+.badge-red { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800; }
+.badge-yellow { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800; }
+.badge-orange { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800; }
+.badge-gray { @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800; }
+
+/* Payroll print table */
+.payroll-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.payroll-table th, .payroll-table td {
+  border: 1px solid #333;
+  padding: 4px 8px;
+  text-align: left;
+}
+.payroll-table th {
+  background: #1e3a5f;
+  color: white;
+  font-weight: 600;
+}
+.payroll-table .total-row {
+  background: #f0f4f8;
+  font-weight: bold;
+}
+
+/* Certificate styles */
+.certificate-paper {
+  width: 21cm;
+  min-height: 29.7cm;
+  padding: 2cm;
+  background: white;
+  font-family: 'Times New Roman', serif;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   GLOBAL MOBILE OVERRIDES  — max-width: 768px
+   High-density responsive design for mobile viewports
+   ═══════════════════════════════════════════════════════════════════ */
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+@media (max-width: 768px) {
+  /* ── 1. ROOT LAYOUT & CONTAINMENT ─────────────────────────── */
+  main {
+    padding: 8px !important;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  /* ── 2. CARD SPACING & PADDING ────────────────────────────── */
+  .erp-card,
+  .rounded-2xl,
+  .rounded-3xl {
+    border-radius: 12px !important;
+  }
+
+  /* ── 3. TYPOGRAPHY SCALE-DOWN ────────────────────────────── */
+  h1 { font-size: 1.15rem !important; line-height: 1.3 !important; }
+  h2 { font-size: 1rem !important; line-height: 1.3 !important; }
+  h3 { font-size: 0.9rem !important; line-height: 1.25 !important; }
+
+  /* ── 4. TEXT OVERFLOW TRUNCATION ──────────────────────────── */
+  .truncate-mobile {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ── 5. FORM INPUTS & BUTTONS COMPACTNESS ─────────────────── */
+  input, select, textarea {
+    font-size: 13px !important;
+  }
+
+  /* ── 6. TABLE SCROLL SAFETY ───────────────────────────────── */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  /* ── 7. MODAL SIZING ON MOBILE ────────────────────────────── */
+  .modal-container {
+    margin: 8px !important;
+    padding: 12px !important;
+    max-height: 92vh !important;
+    overflow-y: auto !important;
+  }
+}
+/* ═══════════════════════════════════════════════════════════════════
+   END MOBILE OVERRIDES
+   ═══════════════════════════════════════════════════════════════════ */

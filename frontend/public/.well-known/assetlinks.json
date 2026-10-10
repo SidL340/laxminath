@@ -1,0 +1,41 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "np.edu.school.app.twa",
+      "sha256_cert_fingerprints": [
+        "89:A2:82:70:51:65:EE:B0:FB:E5:D4:D2:58:83:B8:CB:C2:1B:58:0D:98:CE:A0:12:B0:E0:5E:4B:53:87:96:0D"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "np.edu.school.app",
+      "sha256_cert_fingerprints": [
+        "89:A2:82:70:51:65:EE:B0:FB:E5:D4:D2:58:83:B8:CB:C2:1B:58:0D:98:CE:A0:12:B0:E0:5E:4B:53:87:96:0D"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "np.edu.nepalmavi.erp",
+      "sha256_cert_fingerprints": [
+        "89:A2:82:70:51:65:EE:B0:FB:E5:D4:D2:58:83:B8:CB:C2:1B:58:0D:98:CE:A0:12:B0:E0:5E:4B:53:87:96:0D"
+      ]
+    }
+  }
+]
